@@ -1,0 +1,99 @@
+# Written by hand, once, and deliberately not generated.
+#
+# ORDAS opens pull requests into this repository and this workflow decides
+# whether they are any good. If the generator also wrote this file, the verdict
+# would be worthless -- any change that would fail CI could change CI. The
+# ORDAS GitHub App is installed here without the `workflows` permission for
+# exactly that reason, so it cannot touch this file even by accident.
+#
+# The one thing here that the generator's own checks cannot do is install real
+# Airflow. `devtools/airflowstub` in the generator's repository is a stub of
+# about a hundred lines, and its own docstring says Gate C's number is not
+# trustworthy until it has run against the real package. This is where that
+# happens: the DagBag step below is Airflow parsing the DAG the way Airflow
+# parses it, which reaches serialization, timetables, cron validity and
+# start_date semantics that no stub can reach.
+
+name: ci
+
+# Pull requests only, for now. Nothing has been merged to main yet, so a push
+# trigger would report red on a branch that has no bundle in it rather than
+# saying anything about the generator. Add `push: branches: [main]` once a
+# bundle has landed.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AIRFLOW_VERSION: "2.10.5"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Loud rather than empty. A pull request with no bundle in it must not
+      # produce a green check: a check that passed because it found nothing to
+      # look at is indistinguishable, from the outside, from one that looked.
+      - name: there is something to check
+        run: |
+          test -d dags  || { echo "::error::no dags/ -- this repository exists to judge generated bundles"; exit 1; }
+          test -d tests || { echo "::error::dags/ with no tests/ -- a bundle is only half here"; exit 1; }
+          echo "$(find dags -name '*.py' | wc -l) dag file(s), $(find tests -name 'test_*.py' | wc -l) test file(s)"
+
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install "apache-airflow==${AIRFLOW_VERSION}" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+          pip install ruff pytest
+
+      - name: lint
+        run: ruff check --output-format github .
+
+      - name: format
+        run: ruff format --check .
+
+      # The step the stub cannot stand in for. DagBag is what Airflow itself
+      # uses, so an import error here is an import error in a scheduler.
+      - name: the dag bag parses
+        env:
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+          AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+        run: |
+          python - <<'PY'
+          from airflow.models import DagBag
+
+          bag = DagBag("dags", include_examples=False)
+          for path, err in bag.import_errors.items():
+              print(f"::error file={path}::{err}")
+          if bag.import_errors:
+              raise SystemExit(1)
+          if not bag.dags:
+              print("::error::the dag bag parsed cleanly and found no dags")
+              raise SystemExit(1)
+          for dag_id, dag in sorted(bag.dags.items()):
+              print(f"{dag_id}: {len(dag.tasks)} task(s), schedule={dag.schedule_interval!r}")
+          PY
+
+      # Run last, and worth knowing what they are: these tests were written by
+      # the generator, so they are the least independent thing in this file.
+      # They assert the artifact is well-formed, not that it is right.
+      - name: the generated tests
+        env:
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+        run: pytest -q tests
