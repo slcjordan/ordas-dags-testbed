@@ -46,7 +46,7 @@ writes:
     why: "resolve the request at the level that was approved"
   - template: "jsm:Issue/{issue_key}/comment"
     fields: ["body"]
-    why: "say what was granted, in words, on the ticket"
+    why: "say what was granted, in words, on the ticket, and who approved it"
 
 envelope:
   required: ["issue_key"]
