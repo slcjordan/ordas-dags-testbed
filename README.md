@@ -114,3 +114,5 @@ GitHub-hosted runner with no secrets and no trace content, which is what
 happens here. Executing a real segment needs a private repository and is a
 different measurement. That the artifact can be checked without executing
 anything is the point of it being data.
+
+<!-- negative control: no descriptor in this PR -->
