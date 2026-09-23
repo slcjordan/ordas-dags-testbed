@@ -1,25 +1,59 @@
-# Written by hand, once, and deliberately not generated.
+# The replacement judge. YOU install this; ORDAS cannot.
 #
-# ORDAS opens pull requests into this repository and this workflow decides
-# whether they are any good. If the generator also wrote this file, the verdict
-# would be worthless -- any change that would fail CI could change CI. The
-# ORDAS GitHub App is installed here without the `workflows` permission for
-# exactly that reason, so it cannot touch this file even by accident.
+# Goes at .github/workflows/ci.yml in the repository ORDAS opens pull requests
+# against, REPLACING the Airflow one. The ORDAS App holds contents:write and
+# pull_requests:write and refuses workflows:write, so the only way this file
+# reaches a repository is a person putting it there. That is the whole point:
+# an App that can edit the test it is judged by is not being judged.
 #
-# The one thing here that the generator's own checks cannot do is install real
-# Airflow. `devtools/airflowstub` in the generator's repository is a stub of
-# about a hundred lines, and its own docstring says Gate C's number is not
-# trustworthy until it has run against the real package. This is where that
-# happens: the DagBag step below is Airflow parsing the DAG the way Airflow
-# parses it, which reaches serialization, timetables, cron validity and
-# start_date semantics that no stub can reach.
+#
+# WHY THE PREVIOUS ONE HAD TO GO, AND WHAT IT GOT WRONG
+#
+# The Airflow ci.yml ran ruff, ruff format --check, pytest and a DagBag parse
+# against real Airflow 2.10.5. It was a good judge and it earned the number it
+# produced -- it rejected an artifact our own gate had passed, on UP017, which
+# is the only reason that number was worth anything.
+#
+# It cannot judge a segment descriptor. Every step read dags/ or tests/, and
+# ruff ignores YAML. Worse than useless: because push.go builds its tree with
+# base_tree, a pull request carrying only descriptors keeps the merged Python
+# on main, so the workflow found dags/, linted last phase's artifact, and went
+# GREEN in 44 seconds having read none of the six files under review. That is
+# slcjordan/ordas-dags-testbed#4, closed with the finding on it.
+#
+# Its own first step exists to prevent exactly that -- "a check that passed
+# because it found nothing to look at is indistinguishable, from the outside,
+# from one that looked." It asked whether SOMETHING was present. The fix below
+# is to ask whether the thing under review is present, which is a different
+# question and is the one that survives a change of artifact.
+#
+#
+# CHOSEN FROM CONVENTION, THEN FROZEN
+#
+# The number this produces is worth something only if the configuration was
+# picked before the artifact was seen and then left alone. actionlint is the
+# GitHub Actions linter; yamllint's `default` preset is its own default, not a
+# profile tuned until our files passed. Both are pinned.
+#
+# A judge relaxed to make today's bundle green is not a judge. If a check here
+# fails, the generator changes -- or the rule is removed for a stated reason
+# and this comment records which.
+#
+#
+# WHAT THIS STILL CANNOT DO, because a validator whose silence means nothing is
+# worse than none:
+#
+#   - It does not run a segment. Nothing here reaches a broker, a ticket or a
+#     runner, so a green check says the artifact is well formed and says
+#     nothing about whether it does the right thing.
+#   - It does not prove `ordasrun` is on any PATH. Same blind spot the DagBag
+#     parse had: importing a DAG never resolved a bash_command, and reading a
+#     descriptor never resolves its `command`.
+#   - The consumer workflow's shell is unlinted unless shellcheck is present;
+#     actionlint shells out to it and says nothing when it is missing.
 
 name: ci
 
-# Pull requests only, for now. Nothing has been merged to main yet, so a push
-# trigger would report red on a branch that has no bundle in it rather than
-# saying anything about the generator. Add `push: branches: [main]` once a
-# bundle has landed.
 on:
   pull_request:
   workflow_dispatch:
@@ -32,68 +66,199 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AIRFLOW_VERSION: "2.10.5"
-  PYTHON_VERSION: "3.12"
+  # Pinned, and pinned to a VERSION rather than to a moving tag, because a
+  # judge that changes under you cannot tell a regression from an upgrade.
+  ACTIONLINT_VERSION: "1.7.7"
+  YAMLLINT_VERSION: "1.35.1"
+  SCHEMA: "ordas/segment/1"
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 because the two steps below take a three-dot diff
+      # against the merge base, and a shallow clone of the head with a
+      # shallow fetch of the base share no history for git to find one. That
+      # would fail the first step of every run, which is the worst possible
+      # place for a bug: it looks exactly like the artifact being rejected.
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-          cache: pip
+          fetch-depth: 0
 
-      # Loud rather than empty. A pull request with no bundle in it must not
-      # produce a green check: a check that passed because it found nothing to
-      # look at is indistinguishable, from the outside, from one that looked.
-      - name: there is something to check
+      # THE STEP THE OLD WORKFLOW GOT WRONG. It asks whether the artifact
+      # UNDER REVIEW is here, not whether anything is.
+      #
+      # Against the merge base rather than against the working tree: a
+      # descriptor left on main by an earlier pull request is not evidence
+      # about this one, and base_tree means every earlier artifact is still
+      # present in this commit.
+      #
+      # Skipped on workflow_dispatch, where there is no base to diff against.
+      # Skipped rather than silently passing: a manual run is a person asking
+      # a different question, and answering the wrong one quietly is what
+      # this step exists to stop.
+      - name: this pull request carries descriptors
+        if: github.event_name == 'pull_request'
         run: |
-          test -d dags  || { echo "::error::no dags/ -- this repository exists to judge generated bundles"; exit 1; }
-          test -d tests || { echo "::error::dags/ with no tests/ -- a bundle is only half here"; exit 1; }
-          echo "$(find dags -name '*.py' | wc -l) dag file(s), $(find tests -name 'test_*.py' | wc -l) test file(s)"
+          set -euo pipefail
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+                      -- 'ordas/segments/*.yaml' | wc -l)
+          echo "$changed descriptor(s) changed by this pull request"
+          if [ "$changed" -eq 0 ]; then
+            echo "::error::this pull request changes no file under ordas/segments/."
+            echo "::error::A green check here would be computed over artifacts that"
+            echo "::error::were already on ${{ github.base_ref }}, which is how #4 passed"
+            echo "::error::having read none of the six files it carried."
+            exit 1
+          fi
+
+      # The Python path is deleted upstream. If it reappears in a pull request
+      # the generator has regressed to an artifact this repository no longer
+      # has a toolchain for, and a silent pass would hide it.
+      - name: and no python
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+               -- '*.py' 'dags/**' 'tests/**' | grep -q .; then
+            echo "::error::this pull request carries Python. The Airflow path was deleted;"
+            echo "::error::nothing here can lint, import or run it."
+            exit 1
+          fi
 
       - name: install
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install "apache-airflow==${AIRFLOW_VERSION}" \
-            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
-          pip install ruff pytest
+          pip install "yamllint==${YAMLLINT_VERSION}"
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) \
+            "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
 
-      - name: lint
-        run: ruff check --output-format github .
-
-      - name: format
-        run: ruff format --check .
-
-      # The step the stub cannot stand in for. DagBag is what Airflow itself
-      # uses, so an import error here is an import error in a scheduler.
-      - name: the dag bag parses
-        env:
-          AIRFLOW_HOME: ${{ runner.temp }}/airflow
-          AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      # yamllint's own default preset, with ONE stated departure.
+      #
+      # It rejected the artifact on its first run, which is the property that
+      # made the last frozen configuration worth anything. Two findings and
+      # they were different kinds:
+      #
+      #   - Missing `---`. The generator was wrong and now emits it.
+      #   - Three lines over 80. One was a 192-character `why:` string; the
+      #     generator was wrong and folds prose now. The others are
+      #     `source_sha256: "<64 hex>"`, which is 81 characters and cannot be
+      #     anything else, so that rule is UNSATISFIABLE rather than unmet.
+      #
+      # So max is 88 rather than 80. The number is not chosen from what makes
+      # today's bundle pass -- it is ruff's E501 default, the number the
+      # deleted emit/linewidth.go enforced, and the one the previous frozen
+      # configuration ran. 81 is the floor the schema forces; 88 is the
+      # convention above it. Anything that needs more than 88 is prose that
+      # should have been folded.
+      #
+      # --strict, so the warnings fail too. A judge that prints a warning
+      # nobody reads has taught nobody anything.
+      - name: yamllint
         run: |
-          python - <<'PY'
-          from airflow.models import DagBag
+          yamllint --strict --format github \
+            -d '{extends: default, rules: {line-length: {max: 88}}}' \
+            ordas/segments/
 
-          bag = DagBag("dags", include_examples=False)
-          for path, err in bag.import_errors.items():
-              print(f"::error file={path}::{err}")
-          if bag.import_errors:
-              raise SystemExit(1)
-          if not bag.dags:
-              print("::error::the dag bag parsed cleanly and found no dags")
-              raise SystemExit(1)
-          for dag_id, dag in sorted(bag.dags.items()):
-              print(f"{dag_id}: {len(dag.tasks)} task(s), schedule={dag.schedule_interval!r}")
+      # A parser that is not the emitter's. internal/emit writes YAML by hand
+      # rather than take a dependency for one file, so until this step nothing
+      # anywhere read the output back. A substring check cannot see wrong
+      # nesting; this can.
+      - name: the descriptor parses, and says what it has to say
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib, sys, yaml
+
+          SCHEMA = "ordas/segment/1"
+          # The keys the consumer workflow reads with yq. If one of these is
+          # absent the segment fails at run time with an empty variable, which
+          # is the failure this step exists to move earlier.
+          NEEDED = ["schema", "process", "unit", "segment", "segment_count",
+                    "step_id", "scope", "actor", "resume_on", "parks_at",
+                    "reads", "writes", "envelope", "command",
+                    "timeout_seconds", "broker_url", "emitter",
+                    "source_sha256"]
+          # The whole vocabulary. A descriptor is data and this is what makes
+          # that enforceable from the outside: a key nobody predicted is
+          # refused here on the same terms as one that was.
+          ALLOWED = set(NEEDED)
+
+          bad = 0
+          paths = sorted(pathlib.Path("ordas/segments").glob("*.yaml"))
+          if not paths:
+              print("::error::ordas/segments/ holds no descriptors")
+              sys.exit(1)
+          for p in paths:
+              doc = yaml.safe_load(p.read_text())
+              if not isinstance(doc, dict):
+                  print(f"::error file={p}::not a mapping")
+                  bad += 1
+                  continue
+              for k in NEEDED:
+                  if k not in doc:
+                      print(f"::error file={p}::missing key {k}")
+                      bad += 1
+              for k in doc:
+                  if k not in ALLOWED:
+                      print(f"::error file={p}::unknown key {k}: this schema is closed")
+                      bad += 1
+              if doc.get("schema") != SCHEMA:
+                  print(f"::error file={p}::schema is {doc.get('schema')!r}, not {SCHEMA!r}")
+                  bad += 1
+              if not isinstance(doc.get("timeout_seconds"), int):
+                  print(f"::error file={p}::timeout_seconds is not an integer")
+                  bad += 1
+              env = doc.get("envelope")
+              if not isinstance(env, dict) or not isinstance(env.get("required"), list):
+                  print(f"::error file={p}::envelope.required is not a list")
+                  bad += 1
+              for w in doc.get("writes") or []:
+                  if not isinstance(w, dict) or "template" not in w or "fields" not in w:
+                      print(f"::error file={p}::a writes entry has no template/fields")
+                      bad += 1
+              print(f"{p}: segment {doc.get('segment')} of {doc.get('segment_count')}, "
+                    f"step {doc.get('step_id')}, {len(doc)} keys")
+          sys.exit(1 if bad else 0)
           PY
 
-      # Run last, and worth knowing what they are: these tests were written by
-      # the generator, so they are the least independent thing in this file.
-      # They assert the artifact is well-formed, not that it is right.
-      - name: the generated tests
-        env:
-          AIRFLOW_HOME: ${{ runner.temp }}/airflow
-        run: pytest -q tests
+      # An evidence block per descriptor, and it has to hash THIS file.
+      #
+      # The point of the pair is that an edit moving one hash and not the other
+      # is a hand-edit, and that is the number Gate C is asking for. A bundle
+      # whose evidence block does not match is not a hand-edit detector, it is
+      # a hand-edit detector that has already been defeated.
+      - name: every descriptor has an evidence block that hashes it
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, pathlib, sys
+
+          bad = 0
+          for p in sorted(pathlib.Path("ordas/segments").glob("*.yaml")):
+              got = hashlib.sha256(p.read_bytes()).hexdigest()
+              hits = [e for e in pathlib.Path("evidence").glob("*.json")
+                      if json.loads(e.read_text()).get("descriptor_sha256") == got]
+              if hits:
+                  print(f"{p}: {got[:12]} matches {hits[0]}")
+                  continue
+              print(f"::error file={p}::no evidence block carries descriptor_sha256 {got[:12]}")
+              print(f"::error file={p}::either this file was hand-edited after generation,")
+              print(f"::error file={p}::or its evidence block is missing from the bundle.")
+              bad += 1
+          sys.exit(1 if bad else 0)
+          PY
+
+      # The workflow that RUNS the descriptors, checked by the tool everyone
+      # uses for the purpose. This file is in that set: a judge that will not
+      # lint itself is asking for trust it has not earned.
+      - name: actionlint
+        run: '"$RUNNER_TEMP/actionlint" -color'
+
+      - name: what this did not check
+        if: always()
+        run: |
+          echo "Nothing above ran a segment, reached a broker, or resolved the"
+          echo "command a descriptor names. A green check here means the artifact"
+          echo "is well formed. It says nothing about whether it is right."
