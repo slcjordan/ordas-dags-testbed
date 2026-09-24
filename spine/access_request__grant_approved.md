@@ -34,19 +34,45 @@ what it wrote against what it said. That catches drift in our CI rather
 than in your Jira, which is better than nothing and is not the same as an
 enforced permission.
 
-## There is no spine to review
+## The spine, in prose
 
-This segment is hand-written Go, not a promoted spine: `ordasrun -candidate grant-approved` calls a function in internal/candidate directly, and there is no rendered handler to describe.
+Written by `render.Describe` from the skill declarations and the bindings.
+No model wrote any of it, which is why it reads like a specification: the
+one sentence a reviewer reads instead of the spine must not be the one
+sentence nothing checks.
 
-**What this means for the review.** You can see WHAT this segment touches:
-the read set and the write set above are both declared, and together they
-bound the blast radius. What you cannot see is WHEN and WHY -- which
-branch it takes, in what order it writes, and what decides between
-resolving a request and parking it for a person. That is what a rendered
-spine shows and what a hand-written segment has no way to say.
+This spine is the work for rule servicedesk/grant-approved. It has 2 steps, none of which run without asking a model.
 
-So approving this bundle means accepting the bound above without seeing
-the reasoning inside it. Whether that is enough is a judgement about how
-much the write set can hurt, which is exactly the judgement a reviewer is
-qualified to make and could not make from four files that never mentioned
-it.
+Step 10 asks a model for body, then runs comment_on_issue.
+Leave a comment on a service-desk ticket, saying what was decided and why.
+It reads jsm:Issue/{issue_key} and writes jsm:Issue/{issue_key}/comment.
+
+Step 20 asks a model for status, then runs set_issue_status.
+Move a service-desk ticket to a status.
+It reads jsm:Issue/{issue_key} and writes jsm:Issue/{issue_key}.
+
+## The spine, step by step
+
+Rule `servicedesk/grant-approved`, mined from queue `Access requests`:
+
+```
+handler servicedesk/grant-approved  (2 steps, 0% frozen)
+  10  generative  comment_on_issue <- body
+      covers=exact  n=0 k=0 bound=0%  hand-authored: body is declared free text and cannot be frozen
+  20  generative  set_issue_status <- status
+      covers=params  n=0 k=0 bound=0%  UNFROZEN BY THIS CORRECTION: was frozen to the constant "Access Granted"; the skill is retained, so which call to make stays decided and only the status is guessed
+```
+
+## How to read a generative step
+
+A frozen step is decided: the skill and every argument are fixed here and a
+run cannot change them. A generative step asks a model at run time, and the
+two things worth checking are what it is allowed to call and what it is
+allowed to supply. A step naming a skill has already had the call decided
+and supplies arguments only; a step naming none may choose from the skills
+listed as offered, and from nothing else. A generative step offering no
+skills can escalate or decline and do nothing else.
+
+Arguments listed as unbound are the ones the evidence could not fix. They
+are named rather than omitted because an argument a model supplies is the
+part of this spine a reviewer should look at hardest.

@@ -19,10 +19,10 @@
 # schema below is the whole vocabulary. What executes it is a workflow you
 # wrote, in your repository, that ORDAS cannot edit.
 ---
-schema: "ordas/segment/1"
+schema: "ordas/segment/2"
 
-emitter: "emit/2"
-source_sha256: "1b03581997ecd936acd2bfca454f9ff3f27fa58f7710cd7c275995018255527d"
+emitter: "emit/3"
+source_sha256: "f8daa8b382a132e5cfa654bfcf6d45db1d8317b1366d691a616504031eb2d272"
 
 process: "access-request"
 unit: "request-approval"
