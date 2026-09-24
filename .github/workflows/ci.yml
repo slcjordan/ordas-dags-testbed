@@ -18,7 +18,7 @@
 # ruff ignores YAML. Worse than useless: because push.go builds its tree with
 # base_tree, a pull request carrying only descriptors keeps the merged Python
 # on main, so the workflow found dags/, linted last phase's artifact, and went
-# GREEN in 44 seconds having read none of the six files under review. That is
+# GREEN in 38 seconds having read none of the six files under review. That is
 # slcjordan/ordas-dags-testbed#4, closed with the finding on it.
 #
 # Its own first step exists to prevent exactly that -- "a check that passed
@@ -70,7 +70,16 @@ env:
   # judge that changes under you cannot tell a regression from an upgrade.
   ACTIONLINT_VERSION: "1.7.7"
   YAMLLINT_VERSION: "1.35.1"
-  SCHEMA: "ordas/segment/1"
+  # Both versions, for the reason the runner workflow accepts both: between
+  # ORDAS's pull request and the migration being applied, this repository
+  # holds descriptors of each.
+  #
+  # READ by the step below rather than restated in it. It used to be neither
+  # -- the value was pinned here and the Python heredoc held its own copy,
+  # because `<<'"'"'PY'"'"'` is quoted and does not interpolate -- so the pin was
+  # decoration and the judge's real answer was three screens away. Two copies
+  # of one fact drift, and the drift is invisible because both look right.
+  SCHEMAS: "ordas/segment/1 ordas/segment/2"
 
 jobs:
   check:
@@ -169,21 +178,27 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import pathlib, sys, yaml
+          import os, pathlib, sys, yaml
 
-          SCHEMA = "ordas/segment/1"
+          SCHEMAS = set(os.environ["SCHEMAS"].split())
           # The keys the consumer workflow reads with yq. If one of these is
           # absent the segment fails at run time with an empty variable, which
           # is the failure this step exists to move earlier.
-          NEEDED = ["schema", "process", "unit", "segment", "segment_count",
+          NEEDED = ["schema", "process", "segment", "segment_count",
                     "step_id", "scope", "actor", "resume_on", "parks_at",
                     "reads", "writes", "envelope", "command",
                     "timeout_seconds", "broker_url", "emitter",
                     "source_sha256"]
-          # The whole vocabulary. A descriptor is data and this is what makes
-          # that enforceable from the outside: a key nobody predicted is
-          # refused here on the same terms as one that was.
-          ALLOWED = set(NEEDED)
+          # WHAT RUNS: exactly one of these shapes, and neither key is in
+          # NEEDED because neither is unconditionally required.
+          #
+          # v1 always names a unit. v2 names a unit OR a handler and a rule.
+          # Checked as an exclusive choice rather than as two optional keys,
+          # because a descriptor carrying both describes a run that cannot
+          # happen -- ordasrun refuses -handler and -candidate together --
+          # and one carrying neither says nothing about what to run at all.
+          # An optional-key check would pass both of those.
+          ALLOWED = set(NEEDED) | {"unit", "handler", "rule"}
 
           bad = 0
           paths = sorted(pathlib.Path("ordas/segments").glob("*.yaml"))
@@ -204,8 +219,42 @@ jobs:
                   if k not in ALLOWED:
                       print(f"::error file={p}::unknown key {k}: this schema is closed")
                       bad += 1
-              if doc.get("schema") != SCHEMA:
-                  print(f"::error file={p}::schema is {doc.get('schema')!r}, not {SCHEMA!r}")
+              if doc.get("schema") not in SCHEMAS:
+                  print(f"::error file={p}::schema is {doc.get('schema')!r}, "
+                        f"and this judge understands {sorted(SCHEMAS)}")
+                  bad += 1
+              # Exactly one way in. Reported as two distinct failures because
+              # they are two different mistakes: an emitter that named both,
+              # and one that named neither.
+              has_unit = bool(doc.get("unit"))
+              has_handler = bool(doc.get("handler"))
+              if has_unit and has_handler:
+                  print(f"::error file={p}::names both unit and handler; "
+                        f"ordasrun refuses -candidate and -handler together, so this "
+                        f"describes a run that cannot happen")
+                  bad += 1
+              elif not has_unit and not has_handler:
+                  print(f"::error file={p}::names neither unit nor handler, so nothing says what runs")
+                  bad += 1
+              if has_handler:
+                  if not doc.get("rule"):
+                      print(f"::error file={p}::names a handler and no rule; the artifact "
+                            f"carries every spine the segment could run and a run is one of them")
+                      bad += 1
+                  h = doc["handler"]
+                  # A path relative to the CHECKOUT, because that is where the
+                  # runner resolves it from. An absolute one is somebody
+                  # else's filesystem encoded into this repository.
+                  if h.startswith("/") or ".." in h.split("/"):
+                      print(f"::error file={p}::handler {h!r} is not a path inside this repository")
+                      bad += 1
+                  elif not pathlib.Path(h).is_file():
+                      print(f"::error file={p}::handler {h!r} is not in this repository, so the "
+                            f"segment would fail at run time with a path that resolves here and "
+                            f"not on the runner")
+                      bad += 1
+              elif doc.get("rule"):
+                  print(f"::error file={p}::names a rule and no handler, which selects nothing")
                   bad += 1
               if not isinstance(doc.get("timeout_seconds"), int):
                   print(f"::error file={p}::timeout_seconds is not an integer")
@@ -247,6 +296,44 @@ jobs:
               print(f"::error file={p}::either this file was hand-edited after generation,")
               print(f"::error file={p}::or its evidence block is missing from the bundle.")
               bad += 1
+
+          # THE FOURTH FILE, and it is the one that most needs this.
+          #
+          # ordas/handlers/*.json is the only file in a bundle that is
+          # EXECUTED -- ordasrun -handler reads it -- so a hand-edit here
+          # changes behaviour where an edit to a descriptor changes which
+          # work runs and an edit to a spine changes only what a reviewer
+          # believes. A judge that hashed the other two and not this one
+          # would be watching the two files whose edits matter least.
+          #
+          # Both directions, because each is a different failure. A handler
+          # no evidence block claims is a file somebody added or edited; an
+          # evidence block claiming a handler that is not here is a bundle
+          # delivered incomplete, which ghapp.Push is built to make
+          # impossible and which this step is where that would be found out.
+          claimed = {}
+          for e in sorted(pathlib.Path("evidence").glob("*.json")):
+              doc = json.loads(e.read_text())
+              if doc.get("handler_deployed"):
+                  claimed[doc.get("handler_sha256")] = e
+          present = {}
+          for h in sorted(pathlib.Path("ordas/handlers").glob("*.json")) \
+                  if pathlib.Path("ordas/handlers").is_dir() else []:
+              present[hashlib.sha256(h.read_bytes()).hexdigest()] = h
+          for digest, h in present.items():
+              if digest in claimed:
+                  print(f"{h}: {digest[:12]} matches {claimed[digest]}")
+                  continue
+              print(f"::error file={h}::no evidence block carries handler_sha256 {digest[:12]};")
+              print(f"::error file={h}::this file is EXECUTED, so an unclaimed edit here is a")
+              print(f"::error file={h}::behaviour change nothing in the bundle accounts for.")
+              bad += 1
+          for digest, e in claimed.items():
+              if digest not in present:
+                  print(f"::error file={e}::claims handler_sha256 {str(digest)[:12]} and no such")
+                  print(f"::error file={e}::file is in ordas/handlers/, so this bundle is incomplete")
+                  print(f"::error file={e}::and the segment it describes cannot run.")
+                  bad += 1
           sys.exit(1 if bad else 0)
           PY
 
