@@ -1,0 +1,41 @@
+[
+  {
+    "RuleID": "servicedesk/grant-approved",
+    "Queue": "Access requests",
+    "Steps": [
+      {
+        "Serial": 10,
+        "Actor": "servicedesk/access-request/grant-approved",
+        "Kind": "generative",
+        "Skill": "comment_on_issue",
+        "Args": null,
+        "Unbound": [
+          "body"
+        ],
+        "Offers": null,
+        "Covers": "exact",
+        "Bound": 0,
+        "N": 0,
+        "K": 0,
+        "Why": "hand-authored: body is declared free text and cannot be frozen"
+      },
+      {
+        "Serial": 20,
+        "Actor": "servicedesk/access-request/grant-approved",
+        "Kind": "generative",
+        "Skill": "set_issue_status",
+        "Args": null,
+        "Unbound": [
+          "status"
+        ],
+        "Offers": null,
+        "Covers": "params",
+        "Bound": 0,
+        "N": 0,
+        "K": 0,
+        "Why": "UNFROZEN BY THIS CORRECTION: was frozen to the constant \"Access Granted\"; the skill is retained, so which call to make stays decided and only the status is guessed"
+      }
+    ],
+    "Description": ""
+  }
+]
