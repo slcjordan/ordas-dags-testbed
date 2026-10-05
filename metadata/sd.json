@@ -1,0 +1,46 @@
+{
+  "name": "SD",
+  "instance": "jsm:ordas-jsmsim",
+  "selector": {
+    "object": "Issue",
+    "filter": [
+      {
+        "field": "project",
+        "op": "eq",
+        "values": [
+          "SD"
+        ]
+      }
+    ],
+    "groupBy": [
+      "key"
+    ]
+  },
+  "group": "dos",
+  "targets": [
+    {
+      "instance": "salesforce:acme",
+      "object": "Case",
+      "bindings": [
+        {
+          "target": "CaseNumber",
+          "rules": [
+            {
+              "kind": "field",
+              "from": "key"
+            }
+          ]
+        },
+        {
+          "target": "IssueKey__c",
+          "rules": [
+            {
+              "kind": "field",
+              "from": "key"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

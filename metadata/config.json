@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "mappings": [
+    {
+      "name": "IT Access",
+      "file": "it-access.json",
+      "pin": "cfg_b20dbdf277e675816ffb2556d30fe79f"
+    },
+    {
+      "name": "IT Refund",
+      "file": "it-refund.json",
+      "pin": "cfg_85da04b2aa600669575a36ed666ca2cf"
+    },
+    {
+      "name": "IT Technical",
+      "file": "it-technical.json",
+      "pin": "cfg_45b0266a4f9daa5bd30e87bd5cf4aa69"
+    },
+    {
+      "name": "SD",
+      "file": "sd.json",
+      "pin": "cfg_0611f7c409c7fb71ca5c08903bf095a1"
+    }
+  ]
+}

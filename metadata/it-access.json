@@ -1,0 +1,53 @@
+{
+  "name": "IT Access",
+  "instance": "jsm:ordas-jsmsim",
+  "selector": {
+    "object": "Issue",
+    "filter": [
+      {
+        "field": "customfield_10010",
+        "op": "eq",
+        "values": [
+          "Access"
+        ]
+      },
+      {
+        "field": "project",
+        "op": "eq",
+        "values": [
+          "IT"
+        ]
+      }
+    ],
+    "groupBy": [
+      "key"
+    ]
+  },
+  "group": "fg",
+  "targets": [
+    {
+      "instance": "salesforce:acme",
+      "object": "Case",
+      "bindings": [
+        {
+          "target": "CaseNumber",
+          "rules": [
+            {
+              "kind": "field",
+              "from": "key"
+            }
+          ]
+        },
+        {
+          "target": "IssueKey__c",
+          "rules": [
+            {
+              "kind": "field",
+              "from": "key"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
